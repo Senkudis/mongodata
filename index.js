@@ -1,4 +1,4 @@
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, Browsers } = require('@whiskeysockets/baileys');
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const pino = require('pino');
 const express = require('express');
@@ -9,9 +9,9 @@ const app = express();
 const API_KEY = process.env.GEMINI_API_KEY;
 const PORT = process.env.PORT || 3000;
 
-let qrCodeImage = "<h1>جاري الاتصال... انتظر قليلاً</h1>";
+let qrCodeImage = "<h1>جاري تجهيز الباركود...</h1>";
 
-// 1. إعداد صفحة الويب
+// 1. صفحة الويب
 app.get('/', (req, res) => {
     res.send(`
         <html>
@@ -25,7 +25,7 @@ app.get('/', (req, res) => {
                 <div style="background:white; padding:20px; display:inline-block; border-radius:10px;">
                     ${qrCodeImage}
                 </div>
-                <p>يتم تحديث الصفحة تلقائياً كل 3 ثواني</p>
+                <p>امسح الكود بسرعة - يتحدث كل 3 ثواني</p>
             </body>
         </html>
     `);
@@ -36,30 +36,31 @@ const genAI = new GoogleGenerativeAI(API_KEY);
 const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
 async function startBot() {
-    // التأكد من وجود مجلد الجلسة
-    if (!fs.existsSync('auth_info')) fs.mkdirSync('auth_info');
-    
+    // 🔥🔥🔥 التعديل المهم جداً: مسح الجلسة القديمة لبدء صفحة جديدة
+    // هذا السطر يمنع الخطأ 405
+    console.log("تنظيف الجلسات القديمة...");
+    if (fs.existsSync('auth_info')) {
+        fs.rmSync('auth_info', { recursive: true, force: true });
+    }
+
     const { state, saveCreds } = await useMultiFileAuthState('auth_info');
+
+    console.log("جاري الاتصال بواتساب...");
 
     const sock = makeWASocket({
         auth: state,
-        printQRInTerminal: false, // لغينا الخيار القديم
-        logger: pino({ level: 'silent' }), // تقليل الإزعاج
-        // هوية متصفح مقبولة جداً لدى واتساب
-        browser: ["Kede Bot", "Chrome", "1.0.0"],
-        // إعدادات الشبكة لتجنب الفصل السريع
-        connectTimeoutMs: 60000,
-        defaultQueryTimeoutMs: 0,
-        keepAliveIntervalMs: 10000,
-        emitOwnEvents: true,
-        retryRequestDelayMs: 250
+        printQRInTerminal: false,
+        logger: pino({ level: 'silent' }),
+        // استخدام هوية متصفح رسمية لتجنب الحظر أو الرفض
+        browser: Browsers.ubuntu('Chrome'),
+        syncFullHistory: false, // تسريع عملية الربط
     });
 
     sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect, qr } = update;
 
         if (qr) {
-            console.log("⚡ QR Code جديد ظهر!");
+            console.log("⚡ QR Code جاهز!");
             qrcode.toDataURL(qr, (err, url) => {
                 if (!err) qrCodeImage = `<img src="${url}" width="300">`;
             });
@@ -67,16 +68,11 @@ async function startBot() {
 
         if (connection === 'close') {
             const reason = (lastDisconnect?.error)?.output?.statusCode;
-            console.log('❌ انقطع الاتصال. السبب:', reason);
+            console.log(`❌ انقطع الاتصال. السبب: ${reason}`);
 
-            // إعادة التشغيل فقط إذا لم يكن السبب هو تسجيل الخروج
-            if (reason !== DisconnectReason.loggedOut) {
-                console.log("🔄 جاري إعادة المحاولة...");
-                setTimeout(startBot, 3000); // ننتظر 3 ثواني قبل المحاولة
-            } else {
-                console.log("⚠️ تم تسجيل الخروج. يجب مسح مجلد auth_info وإعادة الربط.");
-                qrCodeImage = "<h1>تم تسجيل الخروج. أعد تشغيل البوت.</h1>";
-            }
+            // إعادة التشغيل
+            console.log("🔄 إعادة تشغيل البوت...");
+            setTimeout(startBot, 2000);
         } else if (connection === 'open') {
             console.log('✅ تم الاتصال بنجاح! كيدي جاهز.');
             qrCodeImage = "<h1>✅ تم الربط بنجاح!</h1>";
@@ -97,7 +93,6 @@ async function startBot() {
         const body = text.toLowerCase().trim();
         const sender = msg.key.remoteJid;
 
-        // طباعة الرسائل الواردة للتأكد من العمل
         console.log(`📩 رسالة: ${body}`);
 
         if (body.startsWith('كيدي') || body.startsWith('.ai')) {
