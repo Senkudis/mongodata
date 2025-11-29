@@ -1,1 +1,19 @@
-npm install whatsapp-web.js qrcode-terminal @google/generative-ai mongoose wwebjs-mongo
+{
+  "name": "kede-bot",
+  "version": "1.0.0",
+  "description": "WhatsApp Bot powered by Gemini",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "whatsapp-web.js": "latest",
+    "qrcode-terminal": "^0.12.0",
+    "@google/generative-ai": "latest",
+    "mongoose": "latest",
+    "wwebjs-mongo": "latest"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
