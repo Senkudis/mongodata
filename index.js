@@ -1,4 +1,4 @@
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, Browsers } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, Browsers, makeCacheableSignalKeyStore } = require('@whiskeysockets/baileys');
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const pino = require('pino');
 const express = require('express');
@@ -9,15 +9,15 @@ const app = express();
 const API_KEY = process.env.GEMINI_API_KEY;
 const PORT = process.env.PORT || 3000;
 
-let qrCodeImage = "<h1>جاري تجهيز الباركود...</h1>";
+let qrCodeImage = "<h1>جاري التحميل... انتظر 10 ثواني</h1>";
 
-// 1. صفحة الويب
+// صفحة الويب
 app.get('/', (req, res) => {
     res.send(`
         <html>
             <head>
                 <title>Kede Bot</title>
-                <meta http-equiv="refresh" content="3">
+                <meta http-equiv="refresh" content="5">
                 <style>body{font-family:sans-serif; text-align:center; padding-top:50px; background:#f0f2f5;}</style>
             </head>
             <body>
@@ -25,7 +25,7 @@ app.get('/', (req, res) => {
                 <div style="background:white; padding:20px; display:inline-block; border-radius:10px;">
                     ${qrCodeImage}
                 </div>
-                <p>امسح الكود بسرعة - يتحدث كل 3 ثواني</p>
+                <p>تحديث تلقائي كل 5 ثواني</p>
             </body>
         </html>
     `);
@@ -35,32 +35,35 @@ app.listen(PORT, () => console.log(`Server on port ${PORT}`));
 const genAI = new GoogleGenerativeAI(API_KEY);
 const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
+// تنظيف أولي لمرة واحدة فقط عند تشغيل السيرفر (اختياري)
+// امسح السطرين ديل لو عايز البوت يتذكرك بعد إعادة تشغيل السيرفر
+if (fs.existsSync('auth_info')) {
+    try { fs.rmSync('auth_info', { recursive: true, force: true }); } catch(e){}
+}
+
 async function startBot() {
-    // 🔥🔥🔥 التعديل المهم جداً: مسح الجلسة القديمة لبدء صفحة جديدة
-    // هذا السطر يمنع الخطأ 405
-    console.log("تنظيف الجلسات القديمة...");
-    if (fs.existsSync('auth_info')) {
-        fs.rmSync('auth_info', { recursive: true, force: true });
-    }
-
     const { state, saveCreds } = await useMultiFileAuthState('auth_info');
-
-    console.log("جاري الاتصال بواتساب...");
-
+    
+    // استخدام متجر مفاتيح مؤقت لتحسين الاستقرار
     const sock = makeWASocket({
-        auth: state,
+        auth: {
+            creds: state.creds,
+            keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" })),
+        },
         printQRInTerminal: false,
         logger: pino({ level: 'silent' }),
-        // استخدام هوية متصفح رسمية لتجنب الحظر أو الرفض
-        browser: Browsers.ubuntu('Chrome'),
-        syncFullHistory: false, // تسريع عملية الربط
+        browser: Browsers.macOS('Desktop'), // تغيير الهوية لـ Mac لتقليل الحظر
+        connectTimeoutMs: 60000,
+        keepAliveIntervalMs: 10000,
+        emitOwnEvents: true,
+        retryRequestDelayMs: 5000 // الانتظار 5 ثواني قبل إعادة المحاولة
     });
 
     sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect, qr } = update;
 
         if (qr) {
-            console.log("⚡ QR Code جاهز!");
+            console.log("⚡ QR Code جديد جاهز!");
             qrcode.toDataURL(qr, (err, url) => {
                 if (!err) qrCodeImage = `<img src="${url}" width="300">`;
             });
@@ -70,9 +73,18 @@ async function startBot() {
             const reason = (lastDisconnect?.error)?.output?.statusCode;
             console.log(`❌ انقطع الاتصال. السبب: ${reason}`);
 
-            // إعادة التشغيل
-            console.log("🔄 إعادة تشغيل البوت...");
-            setTimeout(startBot, 2000);
+            // لو الخطأ 405 (Not Allowed) أو 403 (Forbidden) أو Logged Out
+            // هنا بس نمسح الجلسة لأنها خربت
+            if (reason === DisconnectReason.loggedOut || reason === 405 || reason === 403) {
+                console.log("⚠️ الجلسة غير صالحة. جاري التنظيف وإعادة البدء...");
+                fs.rmSync('auth_info', { recursive: true, force: true });
+                qrCodeImage = "<h1>جاري تجهيز كود جديد...</h1>";
+                setTimeout(startBot, 5000); // انتظر 5 ثواني
+            } else {
+                // أي خطأ تاني (زي النت فصل) بنعيد المحاولة بدون مسح
+                console.log("🔄 إعادة اتصال عادية...");
+                startBot();
+            }
         } else if (connection === 'open') {
             console.log('✅ تم الاتصال بنجاح! كيدي جاهز.');
             qrCodeImage = "<h1>✅ تم الربط بنجاح!</h1>";
