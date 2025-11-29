@@ -1,4 +1,4 @@
-const { Client, RemoteAuth } = require('whatsapp-web.js');
+const { Client, RemoteAuth, MessageMedia } = require('whatsapp-web.js');
 const { MongoStore } = require('wwebjs-mongo');
 const mongoose = require('mongoose');
 const { GoogleGenerativeAI } = require("@google/generative-ai");
@@ -10,28 +10,28 @@ const API_KEY = process.env.GEMINI_API_KEY;
 const MONGO_URI = process.env.MONGO_URI; 
 const PORT = process.env.PORT || 3000;
 
-// متغير لحفظ صورة الباركود
 let qrCodeImage = "<h1>جاري تشغيل البوت... انتظر قليلاً</h1>";
 
-// إعداد صفحة الويب لعرض الباركود
+// صفحة الويب
 app.get('/', (req, res) => {
     res.send(`
         <html>
-            <head><title>Kede Bot QR</title></head>
-            <body style="display:flex; justify-content:center; align-items:center; height:100vh; background:#f0f0f0; flex-direction:column;">
-                <h2>امسح الكود لربط كيدي</h2>
-                <div>${qrCodeImage}</div>
-                <p style="margin-top:20px;">بعد المسح، سيتم حفظ الجلسة تلقائياً.</p>
+            <head><meta charset="UTF-8"><title>Kede Bot</title></head>
+            <body style="font-family:sans-serif; text-align:center; padding:50px; background:#f4f4f4;">
+                <h2>حالة كيدي</h2>
+                <div style="margin:20px;">${qrCodeImage}</div>
+                <p>امسح الكود لربط البوت</p>
             </body>
         </html>
     `);
 });
 
-app.listen(PORT, () => {
-    console.log(`Server is running on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 
-// الاتصال بقاعدة البيانات وتشغيل البوت
+function fileToGenerativePart(base64Data, mimeType) {
+    return { inlineData: { data: base64Data, mimeType } };
+}
+
 mongoose.connect(MONGO_URI).then(() => {
     const store = new MongoStore({ mongoose: mongoose });
     const genAI = new GoogleGenerativeAI(API_KEY);
@@ -45,9 +45,12 @@ mongoose.connect(MONGO_URI).then(() => {
             store: store,
             backupSyncIntervalMs: 300000
         }),
+        // 🔥🔥🔥 الحل هنا: كتبنا اليوزر ايجنت يدوياً عشان ما يحاول يغيره ويكرش
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Safari/537.36',
+        
         puppeteer: {
             headless: true,
-            executablePath: '/usr/bin/google-chrome-stable', // استخدام كروم السيرفر الخفيف
+            executablePath: '/usr/bin/google-chrome-stable',
             args: [
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
@@ -56,39 +59,62 @@ mongoose.connect(MONGO_URI).then(() => {
                 '--no-first-run',
                 '--no-zygote',
                 '--single-process', 
-                '--disable-gpu'
+                '--disable-gpu',
+                '--disable-extensions' // ضفنا دي كمان عشان تخفف الحمل
             ],
         }
     });
 
-    // تحويل الكود لصورة وعرضها في الصفحة
     client.on('qr', (qr) => {
-        console.log('New QR Received');
+        console.log('QR Generated');
         qrcode.toDataURL(qr, (err, url) => {
-            if (!err) {
-                qrCodeImage = `<img src="${url}" width="300" height="300" style="border: 5px solid white; border-radius: 10px;">`;
-            }
+            if (!err) qrCodeImage = `<img src="${url}" width="300">`;
         });
     });
 
     client.on('ready', () => { 
-        console.log('Kede is Ready!');
+        console.log('✅ Kede is Ready!');
         qrCodeImage = "<h1>✅ تم الاتصال بنجاح! كيدي جاهز.</h1>";
     });
 
-    client.on('remote_session_saved', () => { 
-        console.log('Session Saved!'); 
-    });
+    client.on('remote_session_saved', () => console.log('Session Saved!'));
 
-    client.on('message', async msg => {
+    client.on('message_create', async msg => {
+        if (msg.fromMe && !msg.body.startsWith('.')) return;
+
         const body = msg.body.toLowerCase();
+
+        // ميزة الاستيكر
+        if (msg.hasMedia && (body === 'ملصق' || body === 'sticker')) {
+            try {
+                const media = await msg.downloadMedia();
+                await client.sendMessage(msg.from, media, { sendMediaAsSticker: true, stickerName: "Kede", stickerAuthor: "Bot" });
+                return;
+            } catch(e) { console.error(e); }
+        }
+
+        // Gemini
         if (body.startsWith('.ai') || body.startsWith('كيدي')) {
-             const prompt = body.replace('.ai', '').replace('كيدي', '');
+             const chat = await msg.getChat();
+             chat.sendStateTyping();
+
+             const promptText = body.replace('.ai', '').replace('كيدي', '').trim() || "صف لي هذه الصورة";
+             
              try {
-                const result = await model.generateContent(prompt);
-                msg.reply(result.response.text());
+                let parts = [promptText];
+                if (msg.hasMedia) {
+                    const media = await msg.downloadMedia();
+                    if (media.mimetype.startsWith('image/')) {
+                        parts.push(fileToGenerativePart(media.data, media.mimetype));
+                    }
+                }
+
+                const result = await model.generateContent(parts);
+                await msg.reply(result.response.text());
+                
              } catch(e) { 
-                 console.error(e);
+                 console.error("Gemini Error:", e);
+                 msg.reply("معليش، حصلت مشكلة تقنية 🤕");
              }
         }
     });
