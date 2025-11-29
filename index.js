@@ -10,7 +10,7 @@ const API_KEY = process.env.GEMINI_API_KEY;
 const MONGO_URI = process.env.MONGO_URI;
 const PORT = process.env.PORT || 3000;
 
-let qrCodeImage = "<h1>جاري تشغيل البوت... انتظر قليلاً</h1>";
+let qrCodeImage = "<h1>جاري التحميل...</h1>";
 
 app.get('/', (req, res) => {
     res.send(`
@@ -19,8 +19,7 @@ app.get('/', (req, res) => {
             <body style="font-family:sans-serif; text-align:center; padding:50px; background:#f4f4f4;">
                 <h2>حالة كيدي</h2>
                 <div style="margin:20px;">${qrCodeImage}</div>
-                <p>تحديث تلقائي كل 15 ثانية</p>
-                <script>setTimeout(function(){location.reload()}, 15000);</script>
+                <script>setTimeout(()=>window.location.reload(), 10000);</script>
             </body>
         </html>
     `);
@@ -28,54 +27,39 @@ app.get('/', (req, res) => {
 
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 
-// دالة تحويل الملفات
+// دالة تحويل الصور
 function fileToGenerativePart(base64Data, mimeType) {
     return { inlineData: { data: base64Data, mimeType } };
 }
 
 async function startBot() {
     try {
-        console.log("Connecting to Mongo...");
         await mongoose.connect(MONGO_URI);
         const store = new MongoStore({ mongoose: mongoose });
-        console.log("Mongo Connected.");
-
+        
         const genAI = new GoogleGenerativeAI(API_KEY);
-        const model = genAI.getGenerativeModel({ 
-            model: "gemini-1.5-flash",
-            systemInstruction: "أنت مساعد ذكي ومرح اسمك 'كيدي'. تتحدث باللهجة السودانية."
-        });
+        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
-        console.log("Initializing Client...");
+        console.log("Starting Client...");
 
         const client = new Client({
             authStrategy: new RemoteAuth({
                 store: store,
                 backupSyncIntervalMs: 600000
             }),
-            // 🔥 هذا السطر يمنع الخطأ (Protocol error) لأنه يوقف محاولة تغيير الهوية
-            userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
-            
             puppeteer: {
                 headless: true,
                 executablePath: '/usr/bin/google-chrome-stable',
-                // 🔥 أوامر تخفيف قصوى للذاكرة
+                // 🔥 دي الإعدادات الوحيدة اللي بتشتغل مع كروم الجديد في Render
                 args: [
                     '--no-sandbox',
                     '--disable-setuid-sandbox',
                     '--disable-dev-shm-usage',
                     '--disable-accelerated-2d-canvas',
                     '--no-first-run',
-                    '--no-zygote',
-                    '--single-process', 
-                    '--disable-gpu',
-                    '--disable-extensions',
-                    '--disable-default-apps',
-                    '--disable-software-rasterizer', // تعطيل معالجة الصور الثقيلة
-                    '--disable-sync',
-                    '--window-size=800,600' // تصغير حجم النافذة لتوفير الرام
+                    '--disable-gpu'
                 ],
-                timeout: 60000 // زيادة وقت الانتظار
+                authTimeoutMs: 60000, // إعطاء وقت أطول للتحميل
             }
         });
 
@@ -88,7 +72,7 @@ async function startBot() {
 
         client.on('ready', () => {
             console.log('✅ Kede is Ready!');
-            qrCodeImage = "<h1>✅ تم الاتصال بنجاح! كيدي جاهز.</h1>";
+            qrCodeImage = "<h1>✅ تم الاتصال بنجاح!</h1>";
         });
 
         client.on('remote_session_saved', () => console.log('Session Saved!'));
